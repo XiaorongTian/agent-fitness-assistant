@@ -1,7 +1,7 @@
 """Schemas shared by the chat API and the structured LLM response."""
 
 from enum import Enum
-from typing import Literal,Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -27,13 +27,12 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Input for one chat turn. History must not include the current message."""
+    """Input for one chat turn; conversation history is loaded server-side."""
 
     user_id: str = Field(min_length=1, max_length=128, description="Tenant-scoped user ID")
     message: str = Field(min_length=1, max_length=4_000, description="Current user message")
-    image_url:Optional[str]=None
+    image_url: Optional[str] = None
     session_id: str | None = Field(default=None, max_length=128)
-    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
 
     @field_validator("user_id", "message")
     @classmethod

@@ -1,20 +1,31 @@
 # 启动入口
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api import chat, oss
+from api import chat, memory, oss
 from common.logger import setup_logging
+from memory.runtime import conversation_runtime
 import os
 
 # 初始化日志配置
 setup_logging()
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await conversation_runtime.start()
+    yield
+    await conversation_runtime.close()
+
+
 app = FastAPI(
     title="Fitness Assistant API",
     description="健康助手",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # 1. 配置跨域资源共享 (CORS)
@@ -29,6 +40,7 @@ app.add_middleware(
 
 # 2.挂载路由
 app.include_router(chat.router, prefix="/api", tags=["对话"])
+app.include_router(memory.router, prefix="/api", tags=["记忆"])
 app.include_router(oss.router, prefix="/api", tags=["申请上传签名url"])
 
 # 3.挂载前端资源
