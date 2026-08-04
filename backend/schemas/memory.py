@@ -9,6 +9,7 @@ class HealthProfile(BaseModel):
     """长期记忆接口定义的健康档案数据模型"""
 
     goal: str | None = Field(default=None, max_length=200)
+    city: str | None = Field(default=None, max_length=100)
     food_restrictions: list[str] = Field(default_factory=list, max_length=20)
     exercise_limitations: list[str] = Field(default_factory=list, max_length=20)
     preferences: list[str] = Field(default_factory=list, max_length=20)

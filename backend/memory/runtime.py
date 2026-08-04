@@ -12,13 +12,15 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 
-from agents.chat_agent import build_structured_model, get_chat_model
-from prompts.chat import CHAT_SYSTEM_PROMPT
+from agents.chat_agent import build_health_agent, get_chat_model
 from schemas.chat import HealthAssistantOutput
+from tools.health_tools import HEALTH_TOOL_NAMES
+from tools.search_tools import SEARCH_TOOL_NAMES
 
 MAX_RAW_MESSAGES = 12 #最大消息轮次
 RECENT_MESSAGES_TO_KEEP = 6 #最近保留消息轮次
 MAX_CONTEXT_CHARS = 12_000 #最多字符数量
+AGENT_RECURSION_LIMIT = int(os.getenv("AGENT_RECURSION_LIMIT", "10")) #模型最大循环调用次数，避免错误模式大量调用浪费token
 PROFILE_NAMESPACE = "health_profile" #具体存储信息的命名空间
 PROFILE_KEY = "current" #命名空间中最新的数据index
 
@@ -33,12 +35,54 @@ class ConversationState(TypedDict, total=False):
     running_summary: str
     owner_user_id: str
     last_result: dict[str, Any]
+    last_tool_calls: list[dict[str, Any]]
 
 
 def _message_text(message: AIMessage) -> str:
     if isinstance(message.content, str):
         return message.content
     return str(message.content)
+
+
+def _parse_tool_output(content: Any) -> Any:
+    if not isinstance(content, str):
+        return content
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return content
+
+
+def _extract_tool_calls(messages: list[AnyMessage]) -> list[dict[str, Any]]:
+    """Extract business tool calls and their outputs from an agent run."""
+    traces_by_id: dict[str, dict[str, Any]] = {}
+    ordered_ids: list[str] = []
+
+    for message in messages:
+        for call in getattr(message, "tool_calls", []) or []:
+            name = call.get("name")
+            if name not in HEALTH_TOOL_NAMES | SEARCH_TOOL_NAMES:
+                continue
+            call_id = call.get("id")
+            trace = {
+                "name": name,
+                "arguments": call.get("args") or {},
+                "tool_call_id": call_id,
+            }
+            if call_id:
+                traces_by_id[call_id] = trace
+                ordered_ids.append(call_id)
+            else:
+                synthetic_id = f"{name}:{len(ordered_ids)}"
+                traces_by_id[synthetic_id] = trace
+                ordered_ids.append(synthetic_id)
+
+        if getattr(message, "type", None) == "tool":
+            call_id = getattr(message, "tool_call_id", None)
+            if call_id in traces_by_id:
+                traces_by_id[call_id]["output"] = _parse_tool_output(message.content)
+
+    return [traces_by_id[call_id] for call_id in ordered_ids]
 
 
 async def _initialize_session(
@@ -58,19 +102,15 @@ async def _call_model(
         ("user", runtime.context.user_id, PROFILE_NAMESPACE), PROFILE_KEY
     )
     profile = profile_item.value if profile_item else {}
-    summary = state.get("running_summary", "")
-    context = (
-        "\n\n以下是可信的用户长期健康档案（可能为空）：\n"
-        f"{json.dumps(profile, ensure_ascii=False)}\n"
-        "仅在与当前问题有关时使用；档案中的限制优先于一般建议。"
+    agent = build_health_agent(profile, state.get("running_summary", ""))
+    agent_state = await agent.ainvoke(
+        {"messages": state["messages"]},
+        {"recursion_limit": AGENT_RECURSION_LIMIT},
     )
-    if summary:
-        context += f"\n\n以下是此前会话的压缩摘要：\n{summary}"
-
-    model = build_structured_model()
-    result = await model.ainvoke(
-        [SystemMessage(content=f"{CHAT_SYSTEM_PROMPT}{context}"), *state["messages"]]
-    )
+    tool_calls = _extract_tool_calls(agent_state.get("messages", []))
+    result = agent_state.get("structured_response")
+    if not result:
+        raise RuntimeError("Agent 未返回结构化结果")
     if not isinstance(result, HealthAssistantOutput):
         result = HealthAssistantOutput.model_validate(result)
 
@@ -85,6 +125,7 @@ async def _call_model(
     return {
         "messages": [AIMessage(content=history_content)],
         "last_result": result.model_dump(mode="json"),
+        "last_tool_calls": tool_calls,
     }
 
 

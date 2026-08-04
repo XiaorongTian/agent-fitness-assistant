@@ -1,4 +1,3 @@
 .env
-# Ignore Markdown files
 *.md
 __pycache__/**/*

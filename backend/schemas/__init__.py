@@ -1,6 +1,6 @@
 """API and LLM data contracts."""
 
-from .chat import ChatMessage, ChatRequest, ChatResponse, HealthAction, HealthAssistantOutput
+from .chat import ChatMessage, ChatRequest, ChatResponse, HealthAction, HealthAssistantOutput, ToolCallTrace
 from .memory import HealthProfile, SaveHealthProfileRequest
 
 __all__ = [
@@ -9,6 +9,7 @@ __all__ = [
     "ChatResponse",
     "HealthAction",
     "HealthAssistantOutput",
+    "ToolCallTrace",
     "HealthProfile",
     "SaveHealthProfileRequest",
 ]

@@ -1,7 +1,7 @@
 """Schemas shared by the chat API and the structured LLM response."""
 
 from enum import Enum
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -83,9 +83,19 @@ class HealthAssistantOutput(BaseModel):
         return value
 
 
+class ToolCallTrace(BaseModel):
+    """Visible trace information for one business tool call."""
+
+    name: str = Field(description="Tool name")
+    arguments: dict[str, Any] = Field(default_factory=dict, description="Tool input arguments")
+    tool_call_id: str | None = Field(default=None, description="Provider/LangChain tool call ID")
+    output: Any | None = Field(default=None, description="Tool output, when available")
+
+
 class ChatResponse(BaseModel):
     """输出显示到对话框的格式"""
 
     session_id: str | None = None
     result: HealthAssistantOutput
+    tool_calls: list[ToolCallTrace] = Field(default_factory=list)
     trace_id: str

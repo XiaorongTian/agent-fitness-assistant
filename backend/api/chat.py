@@ -24,6 +24,7 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         result = state.get("last_result")
         if not result:
             raise RuntimeError("会话未返回模型结果")
+        tool_calls = state.get("last_tool_calls", [])
     except RuntimeError as exc:
         logger.warning("trace_id=%s model configuration error: %s", trace_id, exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -37,5 +38,6 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     return ChatResponse(
         session_id=session_id,
         result=result,
+        tool_calls=tool_calls,
         trace_id=trace_id,
     )
