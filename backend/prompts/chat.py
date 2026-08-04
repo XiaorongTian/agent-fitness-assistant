@@ -1,4 +1,4 @@
-"""Prompt for the first, text-only health assistant loop."""
+"""健康助手系统提示。"""
 
 CHAT_SYSTEM_PROMPT = """
 你是“个人健康助手”，服务于希望减脂、久坐办公的人群。使用简洁、友善的中文回答。

@@ -1,18 +1,20 @@
+"""日志配置模块，提供应用统一使用的 logger。"""
+
 import logging
 import sys
 
-# 配置日志格式：时间 - 级别 - 模块 - 消息
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 
+
 def setup_logging():
+    """初始化控制台日志格式和级别。"""
     logging.basicConfig(
         level=logging.INFO,
         format=LOG_FORMAT,
         handlers=[
-            logging.StreamHandler(sys.stdout), # 输出到控制台
-            # logging.FileHandler("app.log")   # 如果需要存到文件可以开启
+            logging.StreamHandler(sys.stdout),
         ]
     )
 
-# 创建一个全局的 logger 实例
+
 logger = logging.getLogger("fitness_assistant")

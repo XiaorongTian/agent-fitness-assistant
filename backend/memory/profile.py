@@ -1,4 +1,4 @@
-"""长期记忆的读写"""
+"""长期健康档案读写模块，封装对 LangGraph store 的访问。"""
 
 from datetime import datetime, timezone
 
@@ -7,17 +7,19 @@ from schemas.memory import HealthProfile
 
 
 def _namespace(user_id: str) -> tuple[str, str, str]:
+    """生成用户健康档案在 store 中的命名空间。"""
     return ("user", user_id, PROFILE_NAMESPACE)
 
-# 长期记忆-读
+
 async def get_health_profile(user_id: str) -> HealthProfile:
+    """读取用户长期健康档案；不存在时返回空档案。"""
     await conversation_runtime.start()
     item = await conversation_runtime.store.aget(_namespace(user_id), PROFILE_KEY)
     return HealthProfile.model_validate(item.value) if item else HealthProfile()
 
-# 长期记忆-写
+
 async def save_health_profile(user_id: str, profile: HealthProfile) -> HealthProfile:
-    """Replace the profile only after the caller has obtained user confirmation."""
+    """保存用户确认后的健康档案，并刷新更新时间。"""
     await conversation_runtime.start()
     profile.updated_at = datetime.now(timezone.utc)
     profile.source = "user_confirmed"
@@ -26,8 +28,8 @@ async def save_health_profile(user_id: str, profile: HealthProfile) -> HealthPro
     )
     return profile
 
-# 长期记忆-删除
+
 async def delete_health_profile(user_id: str) -> None:
-    """Delete the user's cross-session health profile, not conversation history."""
+    """删除用户长期健康档案，不影响会话历史。"""
     await conversation_runtime.start()
     await conversation_runtime.store.adelete(_namespace(user_id), PROFILE_KEY)

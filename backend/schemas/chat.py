@@ -1,4 +1,4 @@
-"""Schemas shared by the chat API and the structured LLM response."""
+"""对话接口的数据模型，定义请求、响应和模型结构化输出。"""
 
 from enum import Enum
 from typing import Any, Literal, Optional
@@ -6,37 +6,18 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
-class ChatRole(str, Enum):
-    """Roles accepted as previous conversation turns."""
-
-    USER = "user"
-    ASSISTANT = "assistant"
-
-
-class ChatMessage(BaseModel):
-    role: ChatRole
-    content: str = Field(min_length=1, max_length=4_000)
-
-    @field_validator("content")
-    @classmethod
-    def strip_content(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("消息内容不能为空")
-        return value
-
-
 class ChatRequest(BaseModel):
-    """Input for one chat turn; conversation history is loaded server-side."""
+    """用户发起单轮对话时提交的数据。"""
 
-    user_id: str = Field(min_length=1, max_length=128, description="Tenant-scoped user ID")
-    message: str = Field(min_length=1, max_length=4_000, description="Current user message")
+    user_id: str = Field(min_length=1, max_length=128, description="用户唯一标识")
+    message: str = Field(min_length=1, max_length=4_000, description="本轮用户输入")
     image_url: Optional[str] = None
     session_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("user_id", "message")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
+        """清理必填文本字段，并拒绝空字符串。"""
         value = value.strip()
         if not value:
             raise ValueError("字段不能为空")
@@ -44,7 +25,8 @@ class ChatRequest(BaseModel):
 
 
 class ChatIntent(str, Enum):
-    # 用户意图识别类型枚举值 
+    """健康助手支持的用户意图分类。"""
+
     DIET = "diet"
     EXERCISE = "exercise"
     SEDENTARY = "sedentary"
@@ -54,46 +36,46 @@ class ChatIntent(str, Enum):
 
 
 class HealthAction(BaseModel):
-    """模型给用户的建议输出"""
+    """面向用户的一条可执行建议。"""
 
-    title: str = Field(description="Short action title")
-    detail: str = Field(description="Specific and executable instruction")
+    title: str = Field(description="简短动作标题")
+    detail: str = Field(description="具体可执行说明")
     priority: Literal["low", "medium", "high"] = "medium"
 
 
 class HealthAssistantOutput(BaseModel):
-    """模型输出的结构化结果，包含意图、回复、建议动作等信息"""
+    """模型必须返回的健康助手结构化结果。"""
 
     intent: ChatIntent
-    reply: str = Field(description="Concise Chinese response for the user")
+    reply: str = Field(description="直接展示给用户的中文回复")
     actions: list[HealthAction] = Field(default_factory=list, max_length=3)
     follow_up_question: str | None = Field(
-        default=None, description="A single question only when more context is required"
+        default=None, description="信息不足时提出的一个追问"
     )
     safety_notice: str | None = Field(
-        default=None, description="Safety or medical escalation notice when needed"
+        default=None, description="必要的安全或就医提醒"
     )
 
     @field_validator("intent", mode="before")
     @classmethod
     def normalize_legacy_intent(cls, value: str) -> str:
-        """兼容部分模型会输出的 normal；其语义等同于 general。"""
+        """兼容 normal 意图。"""
         if isinstance(value, str) and value.strip().lower() == "normal":
             return ChatIntent.GENERAL.value
         return value
 
 
 class ToolCallTrace(BaseModel):
-    """Visible trace information for one business tool call."""
+    """对外返回的一次业务工具调用轨迹。"""
 
-    name: str = Field(description="Tool name")
-    arguments: dict[str, Any] = Field(default_factory=dict, description="Tool input arguments")
-    tool_call_id: str | None = Field(default=None, description="Provider/LangChain tool call ID")
-    output: Any | None = Field(default=None, description="Tool output, when available")
+    name: str = Field(description="工具名称")
+    arguments: dict[str, Any] = Field(default_factory=dict, description="工具入参")
+    tool_call_id: str | None = Field(default=None, description="模型或 LangChain 生成的工具调用 ID")
+    output: Any | None = Field(default=None, description="工具返回结果")
 
 
 class ChatResponse(BaseModel):
-    """输出显示到对话框的格式"""
+    """对话接口返回给调用方的数据。"""
 
     session_id: str | None = None
     result: HealthAssistantOutput

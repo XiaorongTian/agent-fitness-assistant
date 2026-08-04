@@ -1,1 +1,1 @@
-"""Conversation persistence and explicit long-term memory services."""
+"""会话与长期记忆。"""

@@ -1,4 +1,4 @@
-"""长期记忆数据模型定义"""
+"""长期记忆的数据模型，定义用户健康档案和写入请求。"""
 
 from datetime import datetime
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class HealthProfile(BaseModel):
-    """长期记忆接口定义的健康档案数据模型"""
+    """经用户确认后可跨会话使用的健康档案。"""
 
     goal: str | None = Field(default=None, max_length=200)
     city: str | None = Field(default=None, max_length=100)
@@ -18,8 +18,10 @@ class HealthProfile(BaseModel):
 
 
 class SaveHealthProfileRequest(BaseModel):
+    """保存健康档案的请求，必须带用户确认标记。"""
+
     user_id: str = Field(min_length=1, max_length=128)
     profile: HealthProfile
     confirmed: bool = Field(
-        description="Must be true: the user has reviewed and confirmed this profile"
+        description="必须为 true，表示用户已确认该档案可写入长期记忆"
     )

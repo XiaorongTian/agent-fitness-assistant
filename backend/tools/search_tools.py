@@ -1,4 +1,4 @@
-"""Web search tools for the health agent."""
+"""联网搜索工具模块，按配置注册 Tavily 搜索能力。"""
 
 import os
 from typing import Any
@@ -12,7 +12,7 @@ SEARCH_TOOL_NAMES = {"web_search"}
 
 
 def build_search_tools() -> list[Any]:
-    """Build optional web search tools when Tavily is configured."""
+    """配置 Tavily API Key 时构建搜索工具，否则返回空列表。"""
     if not os.getenv("TAVILY_API_KEY"):
         return []
 
@@ -31,7 +31,7 @@ def build_search_tools() -> list[Any]:
 
     @tool
     def web_search(query: str, time_range: str | None = None) -> dict[str, Any]:
-        """使用 Tavily 搜索互联网实时信息。用户询问新闻、政策、研究、网页资料或模型未知的最新信息时使用。"""
+        """使用 Tavily 搜索互联网实时信息，并返回摘要和结果列表。"""
         arguments = {"query": query, "time_range": time_range}
         log_tool_start("web_search", arguments)
         payload: dict[str, Any] = {"query": query}

@@ -1,4 +1,4 @@
-"""Prompt definitions for model-facing application behavior."""
+"""提示词定义。"""
 
 from .chat import CHAT_SYSTEM_PROMPT
 

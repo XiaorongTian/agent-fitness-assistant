@@ -1,50 +1,29 @@
-"""长期记忆的存储生命周期管控"""
+"""Agent 记忆运行时，管理 checkpointer、store 和标准 LangChain Agent。"""
 
 import asyncio
 import json
 import os
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Any
+from uuid import uuid4
 
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, SystemMessage
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
-from langgraph.runtime import Runtime
+from langchain_core.messages import HumanMessage
 
-from agents.chat_agent import build_health_agent, get_chat_model
+from agents.chat_agent import build_health_agent
+from common.logger import logger
 from schemas.chat import HealthAssistantOutput
-from tools.health_tools import HEALTH_TOOL_NAMES
-from tools.search_tools import SEARCH_TOOL_NAMES
+from schemas.context import AgentContext
+from tools.registry import BUSINESS_TOOL_NAMES
 
-MAX_RAW_MESSAGES = 12 #最大消息轮次
-RECENT_MESSAGES_TO_KEEP = 6 #最近保留消息轮次
-MAX_CONTEXT_CHARS = 12_000 #最多字符数量
-AGENT_RECURSION_LIMIT = int(os.getenv("AGENT_RECURSION_LIMIT", "10")) #模型最大循环调用次数，避免错误模式大量调用浪费token
-PROFILE_NAMESPACE = "health_profile" #具体存储信息的命名空间
-PROFILE_KEY = "current" #命名空间中最新的数据index
-
-
-@dataclass
-class GraphContext:
-    user_id: str
-
-
-class ConversationState(TypedDict, total=False):
-    messages: Annotated[list[AnyMessage], add_messages]
-    running_summary: str
-    owner_user_id: str
-    last_result: dict[str, Any]
-    last_tool_calls: list[dict[str, Any]]
-
-
-def _message_text(message: AIMessage) -> str:
-    if isinstance(message.content, str):
-        return message.content
-    return str(message.content)
+AGENT_RECURSION_LIMIT = int(os.getenv("AGENT_RECURSION_LIMIT", "10"))
+PROFILE_NAMESPACE = "health_profile"
+PROFILE_KEY = "current"
+SESSION_NAMESPACE = "session_owner_v2"
+SESSION_OWNER_KEY = "owner_user_id"
 
 
 def _parse_tool_output(content: Any) -> Any:
+    """把工具消息内容尽量解析成 JSON；无法解析时保留原值。"""
     if not isinstance(content, str):
         return content
     try:
@@ -53,15 +32,15 @@ def _parse_tool_output(content: Any) -> Any:
         return content
 
 
-def _extract_tool_calls(messages: list[AnyMessage]) -> list[dict[str, Any]]:
-    """Extract business tool calls and their outputs from an agent run."""
+def _extract_tool_calls(messages: list[Any]) -> list[dict[str, Any]]:
+    """从 Agent 消息中提取本轮业务工具调用及其返回结果。"""
     traces_by_id: dict[str, dict[str, Any]] = {}
     ordered_ids: list[str] = []
 
     for message in messages:
         for call in getattr(message, "tool_calls", []) or []:
             name = call.get("name")
-            if name not in HEALTH_TOOL_NAMES | SEARCH_TOOL_NAMES:
+            if name not in BUSINESS_TOOL_NAMES:
                 continue
             call_id = call.get("id")
             trace = {
@@ -85,118 +64,32 @@ def _extract_tool_calls(messages: list[AnyMessage]) -> list[dict[str, Any]]:
     return [traces_by_id[call_id] for call_id in ordered_ids]
 
 
-async def _initialize_session(
-    state: ConversationState, runtime: Runtime[GraphContext]
-) -> dict[str, str]:
-    owner = state.get("owner_user_id")
-    if owner and owner != runtime.context.user_id:
-        raise PermissionError("该会话不属于当前用户")
-    return {"owner_user_id": runtime.context.user_id}
-
-
-async def _call_model(
-    state: ConversationState, runtime: Runtime[GraphContext]
-) -> dict[str, Any]:
-    """把当前会话和用户健康档案送给 LLM，得到结构化的健康助手回答，并把回答保存成下一轮会话历史"""
-    profile_item = await runtime.store.aget(
-        ("user", runtime.context.user_id, PROFILE_NAMESPACE), PROFILE_KEY
-    )
-    profile = profile_item.value if profile_item else {}
-    agent = build_health_agent(profile, state.get("running_summary", ""))
-    agent_state = await agent.ainvoke(
-        {"messages": state["messages"]},
-        {"recursion_limit": AGENT_RECURSION_LIMIT},
-    )
-    tool_calls = _extract_tool_calls(agent_state.get("messages", []))
-    result = agent_state.get("structured_response")
-    if not result:
-        raise RuntimeError("Agent 未返回结构化结果")
-    if not isinstance(result, HealthAssistantOutput):
-        result = HealthAssistantOutput.model_validate(result)
-
-    history_content = result.reply
-    if result.actions:
-        history_content += "\n行动建议：" + "；".join(
-            f"{action.title}：{action.detail}" for action in result.actions
-        )
-    if result.safety_notice:
-        history_content += f"\n安全提示：{result.safety_notice}"
-
-    return {
-        "messages": [AIMessage(content=history_content)],
-        "last_result": result.model_dump(mode="json"),
-        "last_tool_calls": tool_calls,
-    }
-
-
-def _needs_summarization(
-    state: ConversationState,
-) -> Literal["summarize", "call_model"]:
-    """检查当前会话是否需要压缩成摘要"""
-    messages = state.get("messages", [])
-    total_chars = sum(len(str(message.content)) for message in messages)
-    if len(messages) > MAX_RAW_MESSAGES or total_chars > MAX_CONTEXT_CHARS:
-        return "summarize"
-    return "call_model"
-
-
-async def _summarize(state: ConversationState) -> dict[str, Any]:
-    """把当前会话RECENT_MESSAGES_TO_KEEP之前的内容压缩成摘要，并合并摘要"""
-    messages = state["messages"]
-    messages_to_summarize = messages[:-RECENT_MESSAGES_TO_KEEP]
-    previous_summary = state.get("running_summary", "无")
-    response = await get_chat_model().ainvoke(
-        [
-            SystemMessage(
-                content=(
-                    "请将以下健康助手会话压缩成中文工作摘要。保留用户目标、限制、"
-                    "已确认事实、未完成事项和建议的关键上下文；不要编造信息；不超过 350 字。"
-                )
-            ),
-            HumanMessage(
-                content=(
-                    f"已有摘要：\n{previous_summary}\n\n"
-                    f"待压缩消息：\n"
-                    + "\n".join(f"{message.type}: {_message_text(message)}" for message in messages_to_summarize)
-                )
-            ),
-        ]
-    )
-    return {
-        "running_summary": _message_text(response),
-        "messages": [RemoveMessage(id=message.id) for message in messages_to_summarize],
-    }
-
-
-def build_conversation_graph(checkpointer: Any, store: Any) -> Any:
-    """创建会话、对话产生信息、压缩信息"""
-    builder = StateGraph(ConversationState, context_schema=GraphContext)
-    builder.add_node("initialize_session", _initialize_session)
-    builder.add_node("call_model", _call_model)
-    builder.add_node("summarize", _summarize)
-    builder.add_edge(START, "initialize_session")
-    builder.add_conditional_edges("initialize_session", _needs_summarization)
-    builder.add_edge("summarize", "call_model")
-    builder.add_edge("call_model", END)
-    return builder.compile(checkpointer=checkpointer, store=store)
+def _current_turn_messages(messages: list[Any], current_message_id: str) -> list[Any]:
+    """截取当前用户消息之后的消息，避免返回历史工具调用。"""
+    for index, message in enumerate(messages):
+        if getattr(message, "id", None) == current_message_id:
+            return messages[index:]
+    return messages
 
 
 class ConversationRuntime:
-    """Owns persistence resources for the application lifespan."""
+    """管理 Agent、短期记忆 checkpointer 和长期记忆 store 的生命周期。"""
 
     def __init__(self) -> None:
+        """创建空运行时；实际资源在 start 中按需初始化。"""
         self.checkpointer: Any | None = None
         self.store: Any | None = None
-        self.graph: Any | None = None
+        self.agent: Any | None = None
         self._checkpointer_context: AbstractAsyncContextManager[Any] | None = None
         self._store_context: AbstractAsyncContextManager[Any] | None = None
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
-        if self.graph is not None:
+        """按环境变量初始化内存或 PostgreSQL 记忆后端，并构建 Agent。"""
+        if self.agent is not None:
             return
         async with self._lock:
-            if self.graph is not None:
+            if self.agent is not None:
                 return
             backend = os.getenv("MEMORY_BACKEND", "memory").lower()
             if backend == "postgres":
@@ -220,15 +113,66 @@ class ConversationRuntime:
                 self.store = InMemoryStore()
             else:
                 raise RuntimeError("MEMORY_BACKEND 仅支持 memory 或 postgres")
-            self.graph = build_conversation_graph(self.checkpointer, self.store)
+            self.agent = build_health_agent(self.checkpointer, self.store)
 
     async def close(self) -> None:
+        """关闭持久化连接并清空运行时资源。"""
         if self._store_context:
             await self._store_context.__aexit__(None, None, None)
         if self._checkpointer_context:
             await self._checkpointer_context.__aexit__(None, None, None)
-        self.checkpointer = self.store = self.graph = None
+        self.checkpointer = self.store = self.agent = None
         self._store_context = self._checkpointer_context = None
+
+    async def get_profile_value(self, user_id: str) -> dict[str, Any]:
+        """从长期记忆中读取用户健康档案原始值。"""
+        await self.start()
+        item = await self.store.aget(("user", user_id, PROFILE_NAMESPACE), PROFILE_KEY)
+        return item.value if item else {}
+
+    async def ensure_session_owner(self, user_id: str, session_id: str) -> None:
+        """校验会话归属，防止其他用户复用同一个 session_id。"""
+        await self.start()
+        namespace = ("session", session_id, SESSION_NAMESPACE)
+        item = await self.store.aget(namespace, SESSION_OWNER_KEY)
+        owner_user_id = item.value.get("user_id") if item and isinstance(item.value, dict) else None
+        if owner_user_id and owner_user_id != user_id:
+            raise PermissionError("该会话不属于当前用户")
+        if not item:
+            await self.store.aput(namespace, SESSION_OWNER_KEY, {"user_id": user_id})
+
+    async def invoke_chat(
+        self, user_id: str, session_id: str, message: str
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """调用 Agent 完成一轮对话，并返回结构化结果和工具调用轨迹。"""
+        try:
+            logger.info("chat_stage=start_runtime user_id=%s session_id=%s", user_id, session_id)
+            await self.start()
+            logger.info("chat_stage=ensure_session_owner user_id=%s session_id=%s", user_id, session_id)
+            await self.ensure_session_owner(user_id, session_id)
+            logger.info("chat_stage=get_profile user_id=%s", user_id)
+            profile = await self.get_profile_value(user_id)
+            message_id = uuid4().hex
+            logger.info("chat_stage=agent_invoke user_id=%s session_id=%s", user_id, session_id)
+            agent_state = await self.agent.ainvoke(
+                {"messages": [HumanMessage(content=message, id=message_id)]},
+                {
+                    "configurable": {"thread_id": session_id},
+                    "recursion_limit": AGENT_RECURSION_LIMIT,
+                },
+                context=AgentContext(user_id=user_id, profile=profile),
+            )
+            logger.info("chat_stage=read_structured_response user_id=%s session_id=%s", user_id, session_id)
+            result = agent_state.get("structured_response")
+            if not result:
+                raise RuntimeError("Agent 未返回结构化结果")
+            if not isinstance(result, HealthAssistantOutput):
+                result = HealthAssistantOutput.model_validate(result)
+            messages = _current_turn_messages(agent_state.get("messages", []), message_id)
+            return result.model_dump(mode="json"), _extract_tool_calls(messages)
+        except Exception:
+            logger.exception("chat_stage=failed user_id=%s session_id=%s", user_id, session_id)
+            raise
 
 
 conversation_runtime = ConversationRuntime()

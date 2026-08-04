@@ -1,10 +1,11 @@
-"""API and LLM data contracts."""
+"""接口数据模型。"""
 
-from .chat import ChatMessage, ChatRequest, ChatResponse, HealthAction, HealthAssistantOutput, ToolCallTrace
+from .chat import ChatRequest, ChatResponse, HealthAction, HealthAssistantOutput, ToolCallTrace
+from .context import AgentContext
 from .memory import HealthProfile, SaveHealthProfileRequest
 
 __all__ = [
-    "ChatMessage",
+    "AgentContext",
     "ChatRequest",
     "ChatResponse",
     "HealthAction",

@@ -1,4 +1,4 @@
-"""Time, weather, and lightweight planning tools for the health agent."""
+"""健康 Agent 工具模块，提供时间、天气、运动和饮食规划能力。"""
 
 import json
 from datetime import datetime
@@ -7,9 +7,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 
 from common.tool_logging import log_tool_end, log_tool_start
+from schemas.context import AgentContext
 
 
 WEATHER_LABELS = {
@@ -43,13 +44,14 @@ HEALTH_TOOL_NAMES = {
 
 
 def _get_json(url: str) -> dict[str, Any]:
+    """请求固定 HTTPS 接口并解析 JSON 响应。"""
     request = Request(url, headers={"User-Agent": "PersonalFitnessAssistant/0.1"})
-    with urlopen(request, timeout=8) as response:  # nosec B310: fixed HTTPS endpoints only
+    with urlopen(request, timeout=8) as response:  # nosec B310: 固定 HTTPS 地址
         return json.loads(response.read().decode("utf-8"))
 
 
 def fetch_today_weather(city: str) -> dict[str, Any]:
-    """Fetch current and today's weather from Open-Meteo's public API."""
+    """通过 Open-Meteo 查询指定城市当天实时天气。"""
     if not city.strip():
         return {"error": "尚未设置城市，无法查询天气。"}
     try:
@@ -91,6 +93,7 @@ def fetch_today_weather(city: str) -> dict[str, Any]:
 
 
 def _is_bad_outdoor_weather(weather: dict[str, Any]) -> bool:
+    """判断天气是否不适合常规户外运动。"""
     return (
         "error" in weather
         or weather.get("rain_probability", 0) >= 50
@@ -106,6 +109,7 @@ def _diet_planning_brief(
     days: int,
     meals_per_day: int,
 ) -> dict[str, Any]:
+    """生成饮食规划所需的目标、忌口、份量规则和候选食材。"""
     portion_rule = (
         "每餐优先保证一掌心优质蛋白、半盘非淀粉蔬菜、约一拳头主食；少油少糖。"
         if "减脂" in goal
@@ -131,18 +135,17 @@ def _diet_planning_brief(
     }
 
 
-def build_health_tools(profile: dict[str, Any]) -> list[Any]:
-    """Bind stable, confirmed profile data to the tools for one agent invocation."""
+def _profile_from_runtime(runtime: ToolRuntime[AgentContext]) -> dict[str, Any]:
+    """从工具运行时上下文读取当前用户健康档案。"""
+    return runtime.context.profile if runtime and runtime.context else {}
 
-    profile_city = str(profile.get("city") or "").strip()
-    goal = str(profile.get("goal") or "健康、可持续生活方式")
-    restrictions = [str(value) for value in profile.get("food_restrictions", [])]
-    limitations = [str(value) for value in profile.get("exercise_limitations", [])]
-    preferences = [str(value) for value in profile.get("preferences", [])]
+
+def build_health_tools() -> list[Any]:
+    """构建健康 Agent 可调用的全部健康类工具。"""
 
     @tool
     def get_current_time(timezone_name: str = "Asia/Shanghai") -> dict[str, str]:
-        """查询当前时间。用户询问现在几点、日期或安排时间时使用。"""
+        """查询指定 IANA 时区的当前时间。"""
         log_tool_start("get_current_time", {"timezone_name": timezone_name})
         try:
             now = datetime.now(ZoneInfo(timezone_name))
@@ -155,9 +158,13 @@ def build_health_tools(profile: dict[str, Any]) -> list[Any]:
         return result
 
     @tool
-    def get_today_weather(city: str | None = None) -> dict[str, Any]:
-        """查询指定城市或长期健康档案 city 对应的当天实时天气。用户提供城市时传入 city；回答天气或户外运动前使用。"""
+    async def get_today_weather(
+        runtime: ToolRuntime[AgentContext], city: str | None = None
+    ) -> dict[str, Any]:
+        """查询用户指定城市或健康档案城市的当天实时天气。"""
         log_tool_start("get_today_weather", {"city": city})
+        profile = _profile_from_runtime(runtime)
+        profile_city = str(profile.get("city") or "").strip()
         selected_city = (city or profile_city).strip()
         if not selected_city:
             result = {"error": "用户未提供城市，且长期健康档案尚未设置 city，请先询问用户所在城市。"}
@@ -168,14 +175,21 @@ def build_health_tools(profile: dict[str, Any]) -> list[Any]:
         return result
 
     @tool
-    def generate_today_exercise_plan(
-        available_minutes: int = 30, city: str | None = None
+    async def generate_today_exercise_plan(
+        runtime: ToolRuntime[AgentContext],
+        available_minutes: int = 30,
+        city: str | None = None,
     ) -> dict[str, Any]:
-        """根据个人目标、限制、偏好和指定城市当天的天气生成运动方案。用户提供城市时传入 city；用户请求运动方案时使用。"""
+        """结合用户档案、可用时间和天气生成当天运动方案。"""
         log_tool_start(
             "generate_today_exercise_plan",
             {"available_minutes": available_minutes, "city": city},
         )
+        profile = _profile_from_runtime(runtime)
+        profile_city = str(profile.get("city") or "").strip()
+        goal = str(profile.get("goal") or "健康、可持续生活方式")
+        limitations = [str(value) for value in profile.get("exercise_limitations", [])]
+        preferences = [str(value) for value in profile.get("preferences", [])]
         minutes = min(max(available_minutes, 10), 120)
         selected_city = (city or profile_city).strip()
         weather = fetch_today_weather(selected_city) if selected_city else {"error": "未设置城市"}
@@ -200,9 +214,17 @@ def build_health_tools(profile: dict[str, Any]) -> list[Any]:
         return result
 
     @tool
-    def generate_weekly_diet_plan(days: int = 7, meals_per_day: int = 3) -> dict[str, Any]:
-        """生成一周饮食规划所需的个人约束、份量规则和候选食材。用户请求饮食计划时使用，并根据工具结果组织最终菜单。"""
+    async def generate_weekly_diet_plan(
+        runtime: ToolRuntime[AgentContext],
+        days: int = 7,
+        meals_per_day: int = 3,
+    ) -> dict[str, Any]:
+        """生成未来若干天饮食推荐所需的个性化规划素材。"""
         log_tool_start("generate_weekly_diet_plan", {"days": days, "meals_per_day": meals_per_day})
+        profile = _profile_from_runtime(runtime)
+        goal = str(profile.get("goal") or "健康、可持续生活方式")
+        restrictions = [str(value) for value in profile.get("food_restrictions", [])]
+        preferences = [str(value) for value in profile.get("preferences", [])]
         safe_days = min(max(days, 1), 14)
         safe_meals_per_day = min(max(meals_per_day, 1), 5)
         result = {
