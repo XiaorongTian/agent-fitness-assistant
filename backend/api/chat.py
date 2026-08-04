@@ -20,6 +20,12 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
             user_id=request.user_id,
             session_id=session_id,
             message=request.message,
+            activity_location=(
+                request.activity_location
+                if request.location_consent and request.activity_location
+                else None
+            ),
+            trace_id=trace_id,
         )
     except RuntimeError as exc:
         logger.warning("trace_id=%s model configuration error: %s", trace_id, exc)

@@ -43,20 +43,38 @@ def health_system_prompt(request: ModelRequest) -> str:
         f"{json.dumps(profile, ensure_ascii=False)}\n"
         "仅在与当前问题有关时使用；档案中的限制优先于一般建议。"
     )
+    location_context = ""
+    if context and context.activity_location:
+        source_label = "用户本轮授权提供" if context.location_source == "user_consent" else "开发环境 mock"
+        location_context = (
+            "\n\n位置服务上下文：\n"
+            f"- 当前活动地点：{context.activity_location}（来源：{source_label}）。\n"
+            "- 仅当用户询问附近运动地点、户外运动或路线时，才使用高德 MCP 位置工具。\n"
+            "- 若已调用高德工具并得到结果，直接基于结果生成最终建议，不要重复调用相同工具。\n"
+            "- 推荐附近地点时说明距离、适合的运动类型和安全提醒；不得编造地点、距离或路线。\n"
+        )
+    card_context = ""
+    if context and context.allow_md2card:
+        card_context = (
+            "\n\n中医知识卡片：\n"
+            "- 当前问题允许使用 generate_tcm_knowledge_card。完成中医养生知识回答前，调用它将核心要点整理为简短 Markdown 卡片。\n"
+            "- 卡片应包含标题、2-4 条生活方式要点和必要的就医/安全提示；使用 traditional-chinese 主题。\n"
+            "- 卡片只用于辅助理解，不得将中医养生内容表述为诊断或处方。\n"
+        )
     tool_policy = """
 
 工具使用原则：
 - 需要实时信息、用户长期档案、天气或计划生成能力时，优先使用可用工具。
 - 每个工具的适用场景以工具自身描述为准；不要在未调用工具时编造实时数据或工具结果。
 """
-    return f"{CHAT_SYSTEM_PROMPT}{profile_context}{tool_policy}"
+    return f"{CHAT_SYSTEM_PROMPT}{profile_context}{location_context}{card_context}{tool_policy}"
 
 
-def build_health_agent(checkpointer: Any, store: Any):
+def build_health_agent(checkpointer: Any, store: Any, extra_tools: list[Any] | None = None):
     """构建带短期记忆、长期存储、工具和结构化输出的健康 Agent。"""
     return create_agent(
         model=get_chat_model(),
-        tools=build_agent_tools(),
+        tools=build_agent_tools(extra_tools),
         middleware=[
             health_system_prompt,
             SummarizationMiddleware(

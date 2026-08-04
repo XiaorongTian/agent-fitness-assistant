@@ -13,6 +13,15 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4_000, description="本轮用户输入")
     image_url: Optional[str] = None
     session_id: str | None = Field(default=None, max_length=128)
+    activity_location: str | None = Field(
+        default=None,
+        max_length=300,
+        description="用户授权用于附近运动地点推荐的地址或地点名称",
+    )
+    location_consent: bool = Field(
+        default=False,
+        description="用户是否同意本轮将 activity_location 用于位置服务",
+    )
 
     @field_validator("user_id", "message")
     @classmethod
@@ -22,6 +31,11 @@ class ChatRequest(BaseModel):
         if not value:
             raise ValueError("字段不能为空")
         return value
+
+    @field_validator("activity_location")
+    @classmethod
+    def strip_optional_location(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
 
 
 class ChatIntent(str, Enum):
@@ -72,6 +86,12 @@ class ToolCallTrace(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict, description="工具入参")
     tool_call_id: str | None = Field(default=None, description="模型或 LangChain 生成的工具调用 ID")
     output: Any | None = Field(default=None, description="工具返回结果")
+    mcp_server: str | None = Field(default=None, description="MCP 服务名；本地工具为空")
+    duration_ms: int | None = Field(default=None, ge=0, description="工具调用耗时（毫秒）")
+    status: Literal["succeeded", "failed"] | None = Field(
+        default=None, description="工具调用状态"
+    )
+    error: str | None = Field(default=None, description="失败原因；成功时为空")
 
 
 class ChatResponse(BaseModel):
