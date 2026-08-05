@@ -7,6 +7,7 @@ from tools.diet_record_tools import DIET_RECORD_TOOL_NAMES, build_diet_record_to
 from tools.exercise_task_tools import EXERCISE_TASK_TOOL_NAMES, build_exercise_task_tools
 from tools.health_tools import HEALTH_TOOL_NAMES, build_health_tools
 from tools.search_tools import SEARCH_TOOL_NAMES, build_search_tools
+from tools.tcm_agent_tools import TCM_AGENT_TOOL_NAMES, build_tcm_agent_tools
 
 
 BUSINESS_TOOL_NAMES = (
@@ -15,6 +16,7 @@ BUSINESS_TOOL_NAMES = (
     | DIET_TOOL_NAMES
     | DIET_RECORD_TOOL_NAMES
     | EXERCISE_TASK_TOOL_NAMES
+    | TCM_AGENT_TOOL_NAMES
 )
 
 
@@ -26,5 +28,6 @@ def build_agent_tools(extra_tools: list[Any] | None = None) -> list[Any]:
         *build_diet_record_tools(),
         *build_exercise_task_tools(),
         *build_search_tools(),
+        *build_tcm_agent_tools(),
         *(extra_tools or []),
     ]

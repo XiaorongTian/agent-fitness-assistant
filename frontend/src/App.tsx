@@ -28,6 +28,7 @@ type Message = {
   content: string;
   toolNames?: string[];
   imageUrl?: string;
+  imageUrls?: string[];
 };
 
 type ImageAttachment = {
@@ -296,6 +297,16 @@ function App() {
         throw new Error('detail' in payload ? payload.detail || '健康助手暂时不可用。' : '健康助手暂时不可用。');
       }
       const toolNames = [...new Set((payload.tool_calls || []).map((tool) => tool.name))];
+      const knowledgeCardImageUrls = (payload.tool_calls || [])
+        .filter((tool) => tool.name === 'generate_tcm_knowledge_card')
+        .flatMap((tool) => {
+          const output = tool.output;
+          if (!output || typeof output !== 'object' || !('image_urls' in output)) return [];
+          const imageUrls = output.image_urls;
+          return Array.isArray(imageUrls)
+            ? imageUrls.filter((url): url is string => typeof url === 'string' && url.startsWith('http'))
+            : [];
+        });
       const draftOutput = payload.tool_calls?.find((tool) => tool.name === 'create_food_record_draft')?.output;
       if (
         draftOutput
@@ -323,7 +334,13 @@ function App() {
         ...session,
         messages: [
           ...session.messages,
-          { id: assistantMessageId, role: 'assistant', content: payload.result.reply, toolNames },
+          {
+            id: assistantMessageId,
+            role: 'assistant',
+            content: payload.result.reply,
+            toolNames,
+            imageUrls: [...new Set(knowledgeCardImageUrls)],
+          },
         ],
       }));
       setTypingMessageId(assistantMessageId);
@@ -432,8 +449,8 @@ function App() {
 
         <nav className="primary-nav" aria-label="健康助手功能">
           <span className="nav-item nav-item--active"><MessageCircle size={18} /> 健康对话</span>
-          <span className="nav-item"><Utensils size={18} /> 饮食记录</span>
-          <span className="nav-item"><Dumbbell size={18} /> 运动任务</span>
+          {/* <span className="nav-item"><Utensils size={18} /> 饮食记录</span>
+          <span className="nav-item"><Dumbbell size={18} /> 运动任务</span> */}
         </nav>
 
         <div className="conversation-list">
@@ -483,6 +500,19 @@ function App() {
                   ) : <p>{message.content}</p>}
                   {message.role === 'user' && message.imageUrl && (
                     <img alt="用户上传的食物图片" className="message-image" src={message.imageUrl} />
+                  )}
+                  {message.role === 'assistant' && message.imageUrls && message.imageUrls.length > 0 && (
+                    <div className="knowledge-card-images" aria-label="中医知识卡片">
+                      {message.imageUrls.map((imageUrl) => (
+                        <img
+                          alt="中医养生知识卡片"
+                          key={imageUrl}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          src={imageUrl}
+                        />
+                      ))}
+                    </div>
                   )}
                   {message.toolNames && message.toolNames.length > 0 && message.id !== typingMessageId && (
                     <div className="tool-tags" aria-label="本轮已调用能力">

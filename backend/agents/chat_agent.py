@@ -78,6 +78,9 @@ def health_system_prompt(request: ModelRequest) -> str:
 - 用户明确陈述自己已经吃了或喝了某些食物时，必须调用 create_food_record_draft 创建待确认草稿；不要自动确认或写入正式账本。
 - 创建草稿后，提醒用户在界面中确认或修改；“能不能吃/应该吃什么/计划吃什么”等问题不得创建草稿。
 - 用户明确要求创建、保存或开始执行一项运动任务时，调用 create_user_requested_exercise_task；仅咨询建议时不要创建任务。
+- 用户明确咨询节气养生、中医日常调养、传统养生视角下的作息、饮食或温和活动时，必须调用 consult_tcm_wellness_agent。
+- 对胸痛、呼吸困难、昏厥、突发麻木无力、明显疼痛等高风险情况，不得调用 consult_tcm_wellness_agent；优先给出停止活动和及时就医建议。
+- 中医科普 Agent 的结果只能作为日常科普整合；不得自行补充诊断、体质结论、方剂、药物、剂量、针灸或穴位治疗。
 - 每个工具的适用场景以工具自身描述为准；不要在未调用工具时编造实时数据或工具结果。
 """
     return f"{CHAT_SYSTEM_PROMPT}{profile_context}{location_context}{card_context}{food_image_context}{tool_policy}"

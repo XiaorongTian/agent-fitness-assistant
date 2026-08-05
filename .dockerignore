@@ -6,3 +6,6 @@ __pycache__
 *.pyc
 *.pyo
 *.md
+!backend/knowledge_sources/
+!backend/knowledge_sources/nihaixia/
+!backend/knowledge_sources/nihaixia/**/*.md
