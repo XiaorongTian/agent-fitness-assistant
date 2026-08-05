@@ -3,7 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 from memory.runtime import conversation_runtime
-from schemas.exercise import ExerciseTask, SubmitExerciseFeedbackRequest
+from schemas.exercise import ExerciseTask, StartExerciseTaskRequest, SubmitExerciseFeedbackRequest
 
 EXERCISE_TASK_NAMESPACE = "exercise_tasks_v1"
 
@@ -37,14 +37,28 @@ async def submit_exercise_feedback(task_id: str, request: SubmitExerciseFeedback
     task = await get_exercise_task(request.user_id, task_id)
     if not task:
         raise LookupError("未找到该运动任务，或任务不属于当前用户")
-    if task.status != "pending":
-        raise ValueError("该运动任务已提交反馈，不能重复更新")
+    expected_status = "pending" if request.status == "skipped" else "in_progress"
+    if task.status != expected_status:
+        raise ValueError("请先按任务流程开始执行，或该任务已提交反馈")
     task.status = request.status
     task.actual_minutes = request.actual_minutes
     task.fatigue_score = request.fatigue_score
     task.barrier_reason = request.barrier_reason
     task.feedback_note = request.feedback_note.strip() if request.feedback_note else None
     task.feedback_at = datetime.now(timezone.utc)
+    await save_exercise_task(task)
+    return task
+
+
+async def start_exercise_task(task_id: str, request: StartExerciseTaskRequest) -> ExerciseTask:
+    """把待办运动任务标记为执行中；重复开始或已反馈任务会被拒绝。"""
+    task = await get_exercise_task(request.user_id, task_id)
+    if not task:
+        raise LookupError("未找到该运动任务，或任务不属于当前用户")
+    if task.status != "pending":
+        raise ValueError("该运动任务不是待开始状态，不能重复开始")
+    task.status = "in_progress"
+    task.started_at = datetime.now(timezone.utc)
     await save_exercise_task(task)
     return task
 

@@ -46,3 +46,4 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         tool_calls=tool_calls,
         trace_id=trace_id,
     )
+

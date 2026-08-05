@@ -15,6 +15,7 @@ class ExerciseIntensity(str, Enum):
 
 class ExerciseTaskStatus(str, Enum):
     PENDING = "pending"
+    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     SKIPPED = "skipped"
     TOO_HARD = "too_hard"
@@ -70,6 +71,7 @@ class ExerciseTask(BaseModel):
     adaptation_reason: str = Field(min_length=1, max_length=500)
     status: ExerciseTaskStatus = ExerciseTaskStatus.PENDING
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime | None = None
     feedback_at: datetime | None = None
     actual_minutes: int | None = Field(default=None, ge=0, le=240)
     fatigue_score: int | None = Field(default=None, ge=1, le=5)
@@ -80,7 +82,7 @@ class ExerciseTask(BaseModel):
 
 
 class SubmitExerciseFeedbackRequest(BaseModel):
-    """用户通过前端按钮提交任务执行结果；跳过时可后续补充阻碍原因。"""
+    """用户提交任务最终结果；不执行或不满意时必须说明原因。"""
 
     user_id: str = Field(min_length=1, max_length=128)
     status: Literal["completed", "skipped", "too_hard", "disliked"]
@@ -93,4 +95,20 @@ class SubmitExerciseFeedbackRequest(BaseModel):
     def validate_feedback(self) -> "SubmitExerciseFeedbackRequest":
         if self.status == "completed" and self.actual_minutes is None:
             self.actual_minutes = 0
+        if self.status in {"skipped", "too_hard", "disliked"} and not (self.feedback_note or "").strip():
+            raise ValueError("不执行或不满意时必须填写原因")
         return self
+
+
+class StartExerciseTaskRequest(BaseModel):
+    """用户确认开始执行一项待办运动任务。"""
+
+    user_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("user_id")
+    @classmethod
+    def strip_user_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("user_id 不能为空")
+        return value

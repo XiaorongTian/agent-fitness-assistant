@@ -235,5 +235,4 @@ class ConversationRuntime:
             logger.exception("chat_stage=failed user_id=%s session_id=%s", user_id, session_id)
             raise
 
-
 conversation_runtime = ConversationRuntime()

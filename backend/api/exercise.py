@@ -3,8 +3,18 @@
 from fastapi import APIRouter, HTTPException
 
 from exercise.service import create_user_requested_task, describe_next_task_adjustment
-from memory.exercise import get_recent_exercise_tasks, save_exercise_task, submit_exercise_feedback
-from schemas.exercise import CreateExerciseTaskRequest, ExerciseTask, SubmitExerciseFeedbackRequest
+from memory.exercise import (
+    get_recent_exercise_tasks,
+    save_exercise_task,
+    start_exercise_task,
+    submit_exercise_feedback,
+)
+from schemas.exercise import (
+    CreateExerciseTaskRequest,
+    ExerciseTask,
+    StartExerciseTaskRequest,
+    SubmitExerciseFeedbackRequest,
+)
 
 router = APIRouter()
 
@@ -30,6 +40,17 @@ async def submit_task_feedback(task_id: str, request: SubmitExerciseFeedbackRequ
             task.follow_up_question = "这次主要是时间不够、身体疲劳、天气/场地不便，还是动作不适合？"
         await save_exercise_task(task)
         return task
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/exercise/tasks/{task_id}/start", response_model=ExerciseTask)
+async def start_task(task_id: str, request: StartExerciseTaskRequest) -> ExerciseTask:
+    """用户确认开始执行任务后，将状态从 pending 切换为 in_progress。"""
+    try:
+        return await start_exercise_task(task_id, request)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
