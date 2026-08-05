@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api import chat, memory, oss
+from api import chat, diet, exercise, memory, oss
 from common.logger import setup_logging
 from memory.runtime import conversation_runtime
 
@@ -37,6 +37,8 @@ app.add_middleware(
 
 app.include_router(chat.router, prefix="/api", tags=["对话"])
 app.include_router(memory.router, prefix="/api", tags=["记忆"])
+app.include_router(diet.router, prefix="/api", tags=["饮食记录"])
+app.include_router(exercise.router, prefix="/api", tags=["运动任务"])
 app.include_router(oss.router, prefix="/api", tags=["申请上传签名url"])
 
 if __name__ == "__main__":

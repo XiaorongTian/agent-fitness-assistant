@@ -1,6 +1,7 @@
 """健康 Agent 工具模块，提供时间、天气、运动和饮食规划能力。"""
 
 import json
+import os
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -34,6 +35,8 @@ WEATHER_LABELS = {
     82: "强阵雨",
     95: "雷暴",
 }
+
+DEFAULT_ACTIVITY_LOCATION = os.getenv("DEFAULT_ACTIVITY_LOCATION", "北京来广营地铁站").strip()
 
 HEALTH_TOOL_NAMES = {
     "get_current_time",
@@ -140,6 +143,43 @@ def _profile_from_runtime(runtime: ToolRuntime[AgentContext]) -> dict[str, Any]:
     return runtime.context.profile if runtime and runtime.context else {}
 
 
+def _weather_query_from_location(location: str) -> str:
+    """将常见中文活动地址尽量归一为 Open-Meteo 更易识别的城市查询词。"""
+    normalized = location.strip()
+    for municipality in ("北京", "上海", "天津", "重庆"):
+        if municipality in normalized:
+            return municipality
+    if "市" in normalized:
+        city = normalized.split("市", maxsplit=1)[0].strip()
+        if city:
+            return city
+    return normalized
+
+
+def resolve_weather_location(
+    runtime: ToolRuntime[AgentContext] | None,
+    city: str | None = None,
+) -> tuple[str | None, str]:
+    """统一天气地点优先级：显式城市、用户历史档案、活动地点、开发默认地点。"""
+    explicit_city = (city or "").strip()
+    if explicit_city:
+        return explicit_city, "request_city"
+    profile = _profile_from_runtime(runtime) if runtime else {}
+    profile_city = str(profile.get("city") or "").strip()
+    if profile_city:
+        return profile_city, "profile_city"
+    activity_location = (
+        runtime.context.activity_location.strip()
+        if runtime and runtime.context and runtime.context.activity_location
+        else ""
+    )
+    if activity_location:
+        return _weather_query_from_location(activity_location), "activity_location"
+    if DEFAULT_ACTIVITY_LOCATION:
+        return _weather_query_from_location(DEFAULT_ACTIVITY_LOCATION), "default_activity_location"
+    return None, "missing"
+
+
 def build_health_tools() -> list[Any]:
     """构建健康 Agent 可调用的全部健康类工具。"""
 
@@ -161,16 +201,16 @@ def build_health_tools() -> list[Any]:
     async def get_today_weather(
         runtime: ToolRuntime[AgentContext], city: str | None = None
     ) -> dict[str, Any]:
-        """查询用户指定城市或健康档案城市的当天实时天气。"""
+        """查询指定城市、用户档案城市或当前活动地点的当天实时天气。"""
         log_tool_start("get_today_weather", {"city": city})
-        profile = _profile_from_runtime(runtime)
-        profile_city = str(profile.get("city") or "").strip()
-        selected_city = (city or profile_city).strip()
+        selected_city, location_source = resolve_weather_location(runtime, city)
         if not selected_city:
-            result = {"error": "用户未提供城市，且长期健康档案尚未设置 city，请先询问用户所在城市。"}
+            result = {"error": "未提供城市、长期档案城市或活动地点，无法查询天气。"}
             log_tool_end("get_today_weather", result)
             return result
         result = fetch_today_weather(selected_city)
+        result["location_source"] = location_source
+        result["weather_query"] = selected_city
         log_tool_end("get_today_weather", result)
         return result
 
@@ -186,13 +226,15 @@ def build_health_tools() -> list[Any]:
             {"available_minutes": available_minutes, "city": city},
         )
         profile = _profile_from_runtime(runtime)
-        profile_city = str(profile.get("city") or "").strip()
         goal = str(profile.get("goal") or "健康、可持续生活方式")
         limitations = [str(value) for value in profile.get("exercise_limitations", [])]
         preferences = [str(value) for value in profile.get("preferences", [])]
         minutes = min(max(available_minutes, 10), 120)
-        selected_city = (city or profile_city).strip()
-        weather = fetch_today_weather(selected_city) if selected_city else {"error": "未设置城市"}
+        selected_city, location_source = resolve_weather_location(runtime, city)
+        weather = fetch_today_weather(selected_city) if selected_city else {"error": "未设置城市或活动地点"}
+        if selected_city:
+            weather["location_source"] = location_source
+            weather["weather_query"] = selected_city
         needs_low_impact = any(
             keyword in " ".join(limitations).lower()
             for keyword in ("膝", "踝", "腰", "疼", "伤", "knee", "ankle", "pain")
