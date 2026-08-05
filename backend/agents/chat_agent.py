@@ -24,7 +24,7 @@ def get_chat_model():
         raise RuntimeError("未配置 DASHSCOPE_API_KEY，无法调用对话模型")
 
     return init_chat_model(
-        model=os.getenv("CHAT_MODEL", "qqwen3.5-plus-2026-02-15"),
+        model=os.getenv("CHAT_MODEL", "qwen3.5-plus-2026-04-20"),
         model_provider = "openai", 
         api_key=api_key,
         base_url=os.getenv("DASHSCOPE_BASE_URL") or None,

@@ -16,7 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from agents.tcm_agent import generate_tcm_wellness_answer
-from rag.tcm_wellness import retrieve_tcm_wellness_knowledge_with_trace
+from rag.tcm_wellness import context_limit, retrieve_tcm_wellness_knowledge_with_trace
 from tcm.knowledge import KnowledgeChunk
 from tcm.query_rewriter import rewrite_tcm_retrieval_query
 
@@ -29,7 +29,7 @@ DEFAULT_OUTPUT_DIRECTORY = EVALUATION_ROOT / "results"
 def _load_ragas() -> tuple[Any, Any, Any, Any]:
     """延迟导入，避免 Ragas 依赖影响后端 API 的正常启动。"""
     try:
-        from ragas.llms import LangchainLLMWrapper
+        from ragas.llms import llm_factory
         from ragas.metrics.collections import ContextPrecision, ContextRecall, Faithfulness
     except ModuleNotFoundError as exc:
         if exc.name == "_lzma":
@@ -37,8 +37,36 @@ def _load_ragas() -> tuple[Any, Any, Any, Any]:
                 "当前 Python 缺少 _lzma 扩展，Ragas 的 datasets 依赖无法加载。"
                 "请使用带 xz/lzma 支持的 Python 重新创建虚拟环境后再运行评测。"
             ) from exc
-        raise RuntimeError("缺少 Ragas，请执行 pip install -r requirements.txt") from exc
-    return LangchainLLMWrapper, Faithfulness, ContextPrecision, ContextRecall
+        missing_module = exc.name or "未知模块"
+        raise RuntimeError(
+            f"Ragas 或其依赖导入失败，缺失模块：{missing_module}。"
+            "请执行 pip install -r requirements.txt；如果缺失模块是 "
+            "langchain_community.chat_models.vertexai，请确认 "
+            "langchain-community 已固定为 0.3.30。"
+        ) from exc
+    return llm_factory, Faithfulness, ContextPrecision, ContextRecall
+
+
+def _build_judge_llm(llm_factory: Any) -> Any:
+    """为 Ragas 评测创建 OpenAI 兼容 judge LLM。"""
+    from openai import AsyncOpenAI
+
+    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("未配置 DASHSCOPE_API_KEY，无法创建 Ragas 评审模型")
+
+    model = os.getenv("CHAT_MODEL", "qwen3.5-plus").strip()
+    llm_client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=os.getenv("DASHSCOPE_BASE_URL") or None,
+    )
+    return llm_factory(
+        model,
+        provider="openai",
+        client=llm_client,
+        max_tokens=4096,
+        extra_body={"enable_thinking": False},
+    )
 
 
 def _load_records(path: Path, limit: int | None) -> list[dict[str, Any]]:
@@ -80,7 +108,9 @@ async def _evaluate_record(
         question = record["user_input"]
         rewritten_query = await rewrite_tcm_retrieval_query(question, user_context)
         retrieval = retrieve_tcm_wellness_knowledge_with_trace(
-            query=question, rewritten_query=rewritten_query, limit=3
+            query=question,
+            rewritten_query=rewritten_query,
+            limit=context_limit(),
         )
         chunks = [
             KnowledgeChunk(source_id=item.source_id, title=item.title, content=item.content)
@@ -140,10 +170,8 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def run(dataset_path: Path, output_path: Path, limit: int | None, concurrency: int) -> dict[str, Any]:
-    LangchainLLMWrapper, Faithfulness, ContextPrecision, ContextRecall = _load_ragas()
-    from agents.chat_agent import get_chat_model
-
-    judge_llm = LangchainLLMWrapper(get_chat_model())
+    llm_factory, Faithfulness, ContextPrecision, ContextRecall = _load_ragas()
+    judge_llm = _build_judge_llm(llm_factory)
     faithfulness = Faithfulness(llm=judge_llm)
     context_precision = ContextPrecision(llm=judge_llm)
     context_recall = ContextRecall(llm=judge_llm)
@@ -169,7 +197,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="批量执行中医 RAG Ragas 评测")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_DIRECTORY / "tcm_ragas_results.jsonl")
-    parser.add_argument("--limit", type=int, default=10, help="先小批量试跑，例如 10")
+    parser.add_argument("--limit", type=int, default=50, help="先小批量试跑，例如 10")
     parser.add_argument("--concurrency", type=int, default=int(os.getenv("TCM_RAG_EVAL_CONCURRENCY", "2")))
     args = parser.parse_args()
     if args.concurrency < 1:

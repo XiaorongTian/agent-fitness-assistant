@@ -86,6 +86,11 @@ def _positive_int(name: str, default: int) -> int:
         return default
 
 
+def context_limit() -> int:
+    """最终交给中医 Agent 的知识片段数量。"""
+    return _positive_int("TCM_RAG_CONTEXT_LIMIT", 2)
+
+
 def _rerank_enabled() -> bool:
     return os.getenv("TCM_RAG_ENABLE_RERANK", "true").strip().lower() not in {"0", "false", "no"}
 
@@ -387,6 +392,9 @@ def retrieve_tcm_wellness_knowledge_with_trace(
     return TCMRetrievalResult(chunks=chunks, trace=trace)
 
 
-def retrieve_tcm_wellness_knowledge(query: str, limit: int = 3) -> list[RetrievedTCMChunk]:
+def retrieve_tcm_wellness_knowledge(query: str, limit: int | None = None) -> list[RetrievedTCMChunk]:
     """兼容直接检索入口；未提供重写查询时仍执行向量 + BM25 + rerank。"""
-    return retrieve_tcm_wellness_knowledge_with_trace(query=query, limit=limit).chunks
+    return retrieve_tcm_wellness_knowledge_with_trace(
+        query=query,
+        limit=limit or context_limit(),
+    ).chunks
