@@ -61,6 +61,14 @@ def health_system_prompt(request: ModelRequest) -> str:
             "- 卡片应包含标题、2-4 条生活方式要点和必要的就医/安全提示；使用 traditional-chinese 主题。\n"
             "- 卡片只用于辅助理解，不得将中医养生内容表述为诊断或处方。\n"
         )
+    food_image_context = ""
+    if context and context.food_image_url:
+        food_image_context = (
+            "\n\n饮食图片上下文：\n"
+            "- 用户本轮上传了一张待识别的食物图片。必须调用 create_food_record_draft 创建待确认饮食记录草稿。\n"
+            "- 不要自行猜测图片内容；该工具会把图片交给专用多模态饮食分析模型。\n"
+            "- description 记录用户对图片的补充说明；未提供说明时使用“用户上传食物图片，请识别”。\n"
+        )
     tool_policy = """
 
 工具使用原则：
@@ -72,7 +80,7 @@ def health_system_prompt(request: ModelRequest) -> str:
 - 用户明确要求创建、保存或开始执行一项运动任务时，调用 create_user_requested_exercise_task；仅咨询建议时不要创建任务。
 - 每个工具的适用场景以工具自身描述为准；不要在未调用工具时编造实时数据或工具结果。
 """
-    return f"{CHAT_SYSTEM_PROMPT}{profile_context}{location_context}{card_context}{tool_policy}"
+    return f"{CHAT_SYSTEM_PROMPT}{profile_context}{location_context}{card_context}{food_image_context}{tool_policy}"
 
 
 def build_health_agent(checkpointer: Any, store: Any, extra_tools: list[Any] | None = None):

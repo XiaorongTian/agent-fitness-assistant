@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CirclePlus,
   Dumbbell,
+  ImagePlus,
   Leaf,
   MessageCircle,
   Play,
@@ -26,6 +27,12 @@ type Message = {
   role: Role;
   content: string;
   toolNames?: string[];
+  imageUrl?: string;
+};
+
+type ImageAttachment = {
+  file: File;
+  previewUrl: string;
 };
 
 type ChatSession = {
@@ -65,6 +72,8 @@ type ExerciseStage = 'ready' | 'in_progress' | 'skipped_reason' | 'disliked_reas
 const USER_ID_STORAGE_KEY = 'fitness-assistant-user-id';
 const SESSIONS_STORAGE_KEY = 'fitness-assistant-sessions';
 const ACTIVE_SESSION_STORAGE_KEY = 'fitness-assistant-active-session';
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
+const FOOD_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const WELCOME_MESSAGE: Message = {
   id: 'welcome',
@@ -161,7 +170,10 @@ function App() {
   const [isUpdatingExercise, setIsUpdatingExercise] = useState(false);
   const [exerciseError, setExerciseError] = useState<string | null>(null);
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
+  const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -193,6 +205,49 @@ function App() {
     setAllSessions((current) => current.map((session) => (session.id === sessionId ? updater(session) : session)));
   };
 
+  const clearImageAttachment = () => {
+    if (imageAttachment) URL.revokeObjectURL(imageAttachment.previewUrl);
+    setImageAttachment(null);
+    if (imageInputRef.current) imageInputRef.current.value = '';
+  };
+
+  const selectImage = (file: File | undefined) => {
+    if (!file) return;
+    if (!FOOD_IMAGE_TYPES.has(file.type)) {
+      setError('请选择 JPG、PNG 或 WebP 格式的食物图片。');
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      setError('图片不能超过 10MB。');
+      return;
+    }
+    if (imageAttachment) URL.revokeObjectURL(imageAttachment.previewUrl);
+    setImageAttachment({ file, previewUrl: URL.createObjectURL(file) });
+    setError(null);
+  };
+
+  const uploadFoodImage = async (file: File) => {
+    const extension = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    const objectKey = `food-images/${new Date().toISOString().slice(0, 10)}/${createId()}.${extension}`;
+    const presignResponse = await fetch(`/api/oss/presign?filename=${encodeURIComponent(objectKey)}`);
+    const presign = (await presignResponse.json()) as {
+      uploadUrl?: string;
+      accessUrl?: string;
+      contentType?: string;
+      detail?: string;
+    };
+    if (!presignResponse.ok || !presign.uploadUrl || !presign.accessUrl || !presign.contentType) {
+      throw new Error(presign.detail || '无法获取图片上传凭证。');
+    }
+    const uploadResponse = await fetch(presign.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': presign.contentType },
+      body: file,
+    });
+    if (!uploadResponse.ok) throw new Error('图片上传到 OSS 失败，请稍后重试。');
+    return presign.accessUrl;
+  };
+
   const startNewChat = () => {
     const next = createSession();
     setAllSessions((current) => [next, ...current]);
@@ -202,15 +257,10 @@ function App() {
 
   const sendMessage = async (message = input) => {
     const content = message.trim();
-    if (!content || !activeSession || isSending) return;
+    const attachment = imageAttachment;
+    if ((!content && !attachment) || !activeSession || isSending) return;
 
-    const userMessage: Message = { id: createId(), role: 'user', content };
     const currentSessionId = activeSession.id;
-    updateSession(currentSessionId, (session) => ({
-      ...session,
-      title: session.messages.length <= 1 ? sessionTitle(content) : session.title,
-      messages: [...session.messages, userMessage],
-    }));
     setInput('');
     setError(null);
     setIsSending(true);
@@ -218,6 +268,19 @@ function App() {
     try {
       const userId = localStorage.getItem(USER_ID_STORAGE_KEY) || 'local-health-user';
       localStorage.setItem(USER_ID_STORAGE_KEY, userId);
+      let imageUrl: string | undefined;
+      if (attachment) {
+        setIsUploadingImage(true);
+        imageUrl = await uploadFoodImage(attachment.file);
+        clearImageAttachment();
+      }
+      const displayContent = content || '已上传食物图片，请帮我识别并记录。';
+      const userMessage: Message = { id: createId(), role: 'user', content: displayContent, imageUrl };
+      updateSession(currentSessionId, (session) => ({
+        ...session,
+        title: session.messages.length <= 1 ? sessionTitle(displayContent) : session.title,
+        messages: [...session.messages, userMessage],
+      }));
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -225,6 +288,7 @@ function App() {
           user_id: userId,
           session_id: currentSessionId,
           message: content,
+          image_url: imageUrl,
         }),
       });
       const payload = (await response.json()) as ChatApiResponse | { detail?: string };
@@ -266,6 +330,7 @@ function App() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '发送失败，请稍后再试。');
     } finally {
+      setIsUploadingImage(false);
       setIsSending(false);
     }
   };
@@ -416,6 +481,9 @@ function App() {
                       onProgress={scrollToBottom}
                     />
                   ) : <p>{message.content}</p>}
+                  {message.role === 'user' && message.imageUrl && (
+                    <img alt="用户上传的食物图片" className="message-image" src={message.imageUrl} />
+                  )}
                   {message.toolNames && message.toolNames.length > 0 && message.id !== typingMessageId && (
                     <div className="tool-tags" aria-label="本轮已调用能力">
                       {message.toolNames.map((name) => <span key={name}>已使用：{name}</span>)}
@@ -446,19 +514,45 @@ function App() {
         <div className="composer-wrap">
           {error && <div className="error-banner">{error}</div>}
           <form className="composer" onSubmit={handleSubmit}>
+            <input
+              accept="image/jpeg,image/png,image/webp"
+              aria-label="上传食物图片"
+              className="image-input"
+              disabled={isSending}
+              onChange={(event) => selectImage(event.target.files?.[0])}
+              ref={imageInputRef}
+              type="file"
+            />
+            <button
+              aria-label="上传食物图片"
+              className="image-upload-button"
+              disabled={isSending}
+              onClick={() => imageInputRef.current?.click()}
+              type="button"
+            >
+              <ImagePlus size={19} />
+            </button>
             <textarea
               aria-label="输入健康问题"
               disabled={isSending}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="例如：我今天久坐了 8 小时，晚上适合做什么运动？"
+              placeholder="描述饮食或上传食物图片…"
               rows={1}
               value={input}
             />
-            <button aria-label="发送" className="send-button" disabled={!input.trim() || isSending} type="submit">
+            <button aria-label="发送" className="send-button" disabled={(!input.trim() && !imageAttachment) || isSending} type="submit">
               <SendHorizontal size={19} />
             </button>
           </form>
+          {imageAttachment && (
+            <div className="image-preview">
+              <img alt="待上传的食物图片" src={imageAttachment.previewUrl} />
+              <span>{imageAttachment.file.name}</span>
+              <button aria-label="移除图片" onClick={clearImageAttachment} type="button"><X size={15} /></button>
+            </div>
+          )}
+          {isUploadingImage && <p className="image-uploading">正在上传图片…</p>}
           <p className="composer-hint"><Sparkles size={14} /> 健康建议仅供日常参考；不适或疼痛请及时咨询专业人士。</p>
         </div>
       </section>

@@ -180,6 +180,7 @@ class ConversationRuntime:
         user_id: str,
         session_id: str,
         message: str,
+        image_url: str | None = None,
         activity_location: str | None = None,
         trace_id: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -214,6 +215,7 @@ class ConversationRuntime:
                         profile=profile,
                         activity_location=resolved_location,
                         location_source=location_source if resolved_location else None,
+                        food_image_url=image_url,
                         allow_md2card=_is_tcm_card_request(message),
                     ),
                 )

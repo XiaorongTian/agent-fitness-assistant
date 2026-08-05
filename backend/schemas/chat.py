@@ -3,14 +3,14 @@
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChatRequest(BaseModel):
     """用户发起单轮对话时提交的数据。"""
 
     user_id: str = Field(min_length=1, max_length=128, description="用户唯一标识")
-    message: str = Field(min_length=1, max_length=4_000, description="本轮用户输入")
+    message: str | None = Field(default=None, max_length=4_000, description="本轮用户输入")
     image_url: Optional[str] = None
     session_id: str | None = Field(default=None, max_length=128)
     activity_location: str | None = Field(
@@ -23,7 +23,7 @@ class ChatRequest(BaseModel):
         description="用户是否同意本轮将 activity_location 用于位置服务",
     )
 
-    @field_validator("user_id", "message")
+    @field_validator("user_id")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
         """清理必填文本字段，并拒绝空字符串。"""
@@ -32,10 +32,21 @@ class ChatRequest(BaseModel):
             raise ValueError("字段不能为空")
         return value
 
+    @field_validator("message", "image_url")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
+
     @field_validator("activity_location")
     @classmethod
     def strip_optional_location(cls, value: str | None) -> str | None:
         return value.strip() if value else None
+
+    @model_validator(mode="after")
+    def validate_message_or_image(self) -> "ChatRequest":
+        if not self.message and not self.image_url:
+            raise ValueError("message 和 image_url 至少提供一个")
+        return self
 
 
 class ChatIntent(str, Enum):

@@ -31,7 +31,13 @@ def build_diet_record_tools() -> list[Any]:
         user_id = runtime.context.user_id if runtime and runtime.context else None
         if not user_id:
             return {"error": "无法确定当前用户，不能创建饮食草稿。"}
-        arguments = {"user_id": user_id, "description_length": len(description), "meal_type": meal_type}
+        image_url = runtime.context.food_image_url if runtime and runtime.context else None
+        arguments = {
+            "user_id": user_id,
+            "description_length": len(description),
+            "meal_type": meal_type,
+            "has_image": bool(image_url),
+        }
         log_tool_start("create_food_record_draft", arguments)
         try:
             # 延迟导入可避免 Agent 初始化阶段与运行时存储产生循环依赖。
@@ -44,13 +50,15 @@ def build_diet_record_tools() -> list[Any]:
                 CreateFoodRecordDraftRequest(
                     user_id=user_id,
                     message=description,
+                    image_url=image_url,
                     meal_type=parsed_meal_type,
                 )
             )
             draft = FoodRecordDraft(
                 **analysis.model_dump(),
                 user_id=user_id,
-                source="text",
+                source="text_and_image" if description and image_url else "image" if image_url else "text",
+                image_url=image_url,
             )
             result = (await save_food_draft(draft)).model_dump(mode="json")
         except ValueError as exc:

@@ -16,10 +16,12 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     session_id = request.session_id or uuid4().hex
     try:
         await conversation_runtime.start()
+        message = request.message or "用户上传食物图片，请识别并创建待确认饮食记录草稿。"
         result, tool_calls = await conversation_runtime.invoke_chat(
             user_id=request.user_id,
             session_id=session_id,
-            message=request.message,
+            message=message,
+            image_url=request.image_url,
             activity_location=(
                 request.activity_location
                 if request.location_consent and request.activity_location
@@ -46,4 +48,3 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         tool_calls=tool_calls,
         trace_id=trace_id,
     )
-

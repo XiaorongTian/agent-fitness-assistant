@@ -12,4 +12,5 @@ class AgentContext:
     profile: dict[str, Any] = field(default_factory=dict)
     activity_location: str | None = None
     location_source: str | None = None
+    food_image_url: str | None = None
     allow_md2card: bool = False
